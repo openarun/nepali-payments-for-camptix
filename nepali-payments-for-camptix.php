@@ -5,7 +5,7 @@
  * Author: Arun Kumar Pariyar
  * Author URI: http://github.com/openarun
  * Text Domain: nepali-payments-for-camptix
- * Version: 1.0.0
+ * Version: 1.0.1
  * Requires at least: 3.5
  * Tested up to: 6.8
  * License: GPLv2 or later
@@ -71,7 +71,7 @@ class CampTix_Nepali_Payments {
 			return;
 		}
 
-		if ( ! class_exists( 'CampTix_Nepali_Payment_Method' ) ) {
+		if ( ! class_exists( 'CampTix_Khalti_Payment_Method' ) ) {
 			require_once plugin_dir_path( __FILE__ ) . 'includes/class-camptix-khalti-payment.php';
 		}
 	}
