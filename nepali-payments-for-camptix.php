@@ -5,7 +5,7 @@
  * Author: Arun Kumar Pariyar
  * Author URI: http://github.com/openarun
  * Text Domain: nepali-payments-for-camptix
- * Version: 1.0.1
+ * Version: 1.0.2
  * Requires at least: 3.5
  * Tested up to: 6.8
  * License: GPLv2 or later
