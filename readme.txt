@@ -2,7 +2,7 @@
 Contributors: arunpyasi
 Tags: camptix, nepali, payments, gateway
 Requires at least: 3.5
-Tested up to: 6.8
+Tested up to: 7.0
 Stable tag: 1.0.2
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
@@ -55,6 +55,10 @@ Currently, only Nepali Rupees (NPR) is supported as that is the only currency ac
 Nothing here
 
 == Changelog ==
+
+= 1.0.2 =
+* Add amount_breakdown and product_details with validation fix for phone numbers
+* Minor bug fixes
 
 = 1.0.1 =
 * Fix minor bugs
