@@ -1,0 +1,316 @@
+/**
+ * Fonepay QR checkout page styles.
+ */
+
+:root {
+	--fonepay-red: #ce2027;
+	--fonepay-black: #0a0d12;
+	--fonepay-white: #ffffff;
+	--fonepay-muted: #65676b;
+	--fonepay-border: #e8e8ea;
+}
+
+.camptix-fonepay-body {
+	margin: 0;
+	min-height: 100vh;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	color: var(--fonepay-black);
+	background: var(--fonepay-white);
+	padding: 32px 20px 48px;
+	box-sizing: border-box;
+	font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.camptix-fonepay-shell {
+	width: 100%;
+	max-width: 420px;
+}
+
+.camptix-fonepay-shell.has-order {
+	max-width: 100%;
+}
+
+.camptix-fonepay-layout {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+	align-items: stretch;
+}
+
+.camptix-fonepay-main {
+	width: 100%;
+	max-width: 420px;
+	margin: 0 auto;
+}
+
+.camptix-fonepay-topbar {
+	width: 100%;
+	margin: 0 0 16px;
+}
+
+.camptix-fonepay-cancel {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 14px;
+	color: var(--fonepay-muted);
+	text-decoration: none;
+}
+
+.camptix-fonepay-cancel:hover {
+	color: var(--fonepay-black);
+	text-decoration: underline;
+}
+
+.camptix-fonepay-order {
+	width: 100%;
+	max-width: 420px;
+	margin: 0 auto;
+	padding: 24px 22px;
+	text-align: left;
+	background: var(--fonepay-white);
+	border: 1px solid var(--fonepay-border);
+	border-radius: 16px;
+	box-shadow: 0 8px 32px rgba(10, 13, 18, 0.06);
+	box-sizing: border-box;
+}
+
+.camptix-fonepay-order-heading {
+	margin: 0 0 14px;
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--fonepay-muted);
+}
+
+.camptix-fonepay-event {
+	margin: 0 0 14px;
+	font-size: 15px;
+	font-weight: 700;
+	color: var(--fonepay-black);
+}
+
+.camptix-fonepay-tickets,
+.camptix-fonepay-attendees {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.camptix-fonepay-tickets li,
+.camptix-fonepay-attendees li {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--fonepay-black);
+}
+
+.camptix-fonepay-tickets li + li,
+.camptix-fonepay-attendees li + li {
+	margin-top: 8px;
+}
+
+.camptix-fonepay-tickets .camptix-fonepay-meta,
+.camptix-fonepay-attendees .camptix-fonepay-meta {
+	color: var(--fonepay-muted);
+	white-space: nowrap;
+}
+
+.camptix-fonepay-attendees {
+	margin-top: 16px;
+	padding-top: 16px;
+	border-top: 1px solid var(--fonepay-border);
+}
+
+.camptix-fonepay-card {
+	width: 100%;
+	background: var(--fonepay-white);
+	border-radius: 16px;
+	box-shadow: 0 8px 32px rgba(10, 13, 18, 0.1);
+	padding: 32px 28px 36px;
+	box-sizing: border-box;
+	text-align: center;
+}
+
+.camptix-fonepay-scanline {
+	margin: 0 0 24px;
+	font-size: 15px;
+	line-height: 1.5;
+	color: var(--fonepay-black);
+}
+
+.camptix-fonepay-scanline strong {
+	font-weight: 700;
+}
+
+.camptix-fonepay-logo {
+	display: block;
+	width: auto;
+	height: 48px;
+	max-width: 200px;
+	margin: 0 auto 20px;
+	object-fit: contain;
+	image-rendering: auto;
+}
+
+.camptix-fonepay-title {
+	margin: 0 0 8px;
+	font-size: 18px;
+	font-weight: 600;
+	color: var(--fonepay-black);
+}
+
+.camptix-fonepay-amount {
+	margin: 0 0 28px;
+	font-size: 22px;
+	font-weight: 700;
+	color: var(--fonepay-red);
+}
+
+.camptix-fonepay-qr-wrap {
+	position: relative;
+	display: inline-block;
+	padding: 18px;
+	margin: 0 auto;
+}
+
+.camptix-fonepay-qr-wrap:before,
+.camptix-fonepay-qr-wrap:after,
+.camptix-fonepay-qr:before,
+.camptix-fonepay-qr:after {
+	content: "";
+	position: absolute;
+	width: 22px;
+	height: 22px;
+	border-color: #c5c5c8;
+	border-style: solid;
+	pointer-events: none;
+}
+
+.camptix-fonepay-qr-wrap:before {
+	top: 0;
+	left: 0;
+	border-width: 3px 0 0 3px;
+}
+
+.camptix-fonepay-qr-wrap:after {
+	top: 0;
+	right: 0;
+	border-width: 3px 3px 0 0;
+}
+
+.camptix-fonepay-qr:before {
+	bottom: -14px;
+	left: -14px;
+	border-width: 0 0 3px 3px;
+}
+
+.camptix-fonepay-qr:after {
+	bottom: -14px;
+	right: -14px;
+	border-width: 0 3px 3px 0;
+}
+
+.camptix-fonepay-qr {
+	position: relative;
+	display: inline-block;
+	background: var(--fonepay-white);
+	line-height: 0;
+}
+
+.camptix-fonepay-qr canvas,
+.camptix-fonepay-qr img.camptix-fonepay-qr-img {
+	display: block;
+	width: 200px;
+	max-width: 100%;
+	height: auto;
+}
+
+.camptix-fonepay-status {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--fonepay-black);
+	background: #f5f5f6;
+	border-radius: 8px;
+	padding: 12px 14px;
+	margin: 28px 0 0;
+}
+
+.camptix-fonepay-btn {
+	display: block;
+	width: 100%;
+	margin: 20px 0 0;
+	padding: 15px 20px;
+	font-size: 16px;
+	font-weight: 700;
+	color: var(--fonepay-white);
+	background: var(--fonepay-red);
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.camptix-fonepay-btn:hover {
+	background: #b51b22;
+}
+
+.camptix-fonepay-btn:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.camptix-fonepay-help {
+	margin: 32px 0 0;
+	text-align: left;
+}
+
+.camptix-fonepay-help h3 {
+	font-size: 14px;
+	font-weight: 700;
+	margin: 0 0 12px;
+	color: var(--fonepay-black);
+}
+
+.camptix-fonepay-help ul {
+	margin: 0;
+	padding-left: 18px;
+	font-size: 13px;
+	line-height: 1.85;
+	color: #3a3d42;
+}
+
+/*
+ * Keep the QR column in the true horizontal center. Side columns are equal
+ * 1fr tracks; order summary only occupies the right track.
+ */
+@media (min-width: 960px) {
+	.camptix-fonepay-shell.has-order .camptix-fonepay-layout {
+		display: grid;
+		grid-template-columns: 1fr minmax(0, 420px) 1fr;
+		column-gap: 28px;
+		align-items: start;
+		width: 100%;
+	}
+
+	.camptix-fonepay-shell.has-order .camptix-fonepay-main {
+		grid-column: 2;
+		max-width: 420px;
+		width: 100%;
+		margin: 0;
+	}
+
+	.camptix-fonepay-shell.has-order .camptix-fonepay-order {
+		grid-column: 3;
+		justify-self: start;
+		width: min(280px, 100%);
+		max-width: 280px;
+		margin: 40px 0 0;
+	}
+}

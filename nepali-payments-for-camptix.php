@@ -5,9 +5,9 @@
  * Author: Arun Kumar Pariyar
  * Author URI: http://github.com/openarun
  * Text Domain: nepali-payments-for-camptix
- * Version: 1.0.2
- * Requires at least: 3.5
- * Tested up to: 7.0
+ * Version: 1.1.0
+ * Requires at least: 4.7.0
+ * Tested up to: 7.0.1
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  *
@@ -74,6 +74,10 @@ class CampTix_Nepali_Payments {
 		if ( ! class_exists( 'CampTix_Khalti_Payment_Method' ) ) {
 			require_once plugin_dir_path( __FILE__ ) . 'includes/class-camptix-khalti-payment.php';
 		}
+
+		if ( ! class_exists( 'CampTix_Fonepay_QR_Payment_Method' ) ) {
+			require_once plugin_dir_path( __FILE__ ) . 'includes/class-camptix-fonepay-qr-payment-method.php';
+		}
 	}
 
 	/**
@@ -84,6 +88,7 @@ class CampTix_Nepali_Payments {
 	public function load_addons() {
 		if ( function_exists( 'camptix_register_addon' ) ) {
 			camptix_register_addon( 'CampTix_Khalti_Payment_Method' );
+			camptix_register_addon( 'CampTix_Fonepay_QR_Payment_Method' );
 		}
 	}
 
