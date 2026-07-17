@@ -77,7 +77,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	 *
 	 * @var int
 	 */
-	const QR_SESSION_TTL = HOUR_IN_SECONDS;
+	const QR_SESSION_TTL = 30 * MINUTE_IN_SECONDS;
 
 	/**
 	 * Nonce actions for first-party Fonepay QR routes (bound to user + session).
@@ -131,6 +131,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 		);
 
 		add_action( 'template_redirect', array( $this, 'template_redirect' ) );
+		add_action( 'camptix_pre_attendee_timeout', array( $this, 'pre_attendee_timeout' ) );
 	}
 
 	/**
@@ -288,6 +289,70 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 			}
 		}
 		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+	}
+
+	/**
+	 * Before CampTix marks a draft attendee as timed out, complete the order if
+	 * Fonepay already shows the payment as success (paid but return never ran).
+	 *
+	 * The Fonepay referenceLabel is derived from the payment token (shared by all
+	 * attendees), so no per-attendee gateway meta is required.
+	 *
+	 * @param int $attendee_id Attendee post ID about to time out.
+	 * @return void
+	 */
+	public function pre_attendee_timeout( $attendee_id ) {
+		$attendee_id = absint( $attendee_id );
+		if ( ! $attendee_id || 'draft' !== get_post_field( 'post_status', $attendee_id ) ) {
+			return;
+		}
+
+		if ( $this->id !== get_post_meta( $attendee_id, 'tix_payment_method', true ) ) {
+			return;
+		}
+
+		$payment_token = (string) get_post_meta( $attendee_id, 'tix_payment_token', true );
+		if ( '' === $payment_token ) {
+			return;
+		}
+
+		$reference_label = $this->get_fonepay_reference_label( $payment_token );
+		if ( '' === $reference_label ) {
+			return;
+		}
+
+		$api_client   = $this->get_api_client();
+		$access_token = $api_client->get_access_token();
+		if ( false === $access_token ) {
+			return;
+		}
+
+		$status_result = $api_client->get_payment_status( $access_token, $reference_label );
+		$status        = isset( $status_result['status'] ) ? (string) $status_result['status'] : '';
+		if ( 'success' !== $status ) {
+			return;
+		}
+
+		if ( ! $this->payment_amount_matches_order( $payment_token, $status_result ) ) {
+			$this->log(
+				'Fonepay timeout reconcile: amount mismatch.',
+				$attendee_id,
+				array(
+					'payment_token'   => $payment_token,
+					'reference_label' => $reference_label,
+					'status'          => $status_result,
+				)
+			);
+			return;
+		}
+
+		$this->clear_qr_session( $payment_token );
+		$this->payment_result(
+			$payment_token,
+			CampTix_Plugin::PAYMENT_STATUS_COMPLETED,
+			$this->build_payment_data( $reference_label, $status_result ),
+			false // Non-interactive: do not redirect.
+		);
 	}
 
 	/**

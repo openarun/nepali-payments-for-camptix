@@ -95,6 +95,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
         );
 
         add_action('template_redirect', array($this, 'template_redirect'));
+        add_action('camptix_pre_attendee_timeout', array($this, 'pre_attendee_timeout'));
     }
 
     /**
@@ -152,6 +153,69 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             }
         }
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
+    }
+
+    /**
+     * Before CampTix marks a draft attendee as timed out, complete the order if
+     * Khalti already shows the payment as Completed (paid but return never ran).
+     *
+     * @param int $attendee_id Attendee post ID about to time out.
+     * @return void
+     */
+    public function pre_attendee_timeout($attendee_id)
+    {
+        $attendee_id = absint($attendee_id);
+        if (! $attendee_id || 'draft' !== get_post_field('post_status', $attendee_id)) {
+            return;
+        }
+
+        if ($this->id !== get_post_meta($attendee_id, 'tix_payment_method', true)) {
+            return;
+        }
+
+        $payment_token = (string) get_post_meta($attendee_id, 'tix_payment_token', true);
+        $pidx          = (string) get_post_meta($attendee_id, self::META_PIDX, true);
+        if ('' === $payment_token || '' === $pidx) {
+            return;
+        }
+
+        $lookup = $this->verify_transaction($pidx);
+        if (empty($lookup['status']) || 'Completed' !== $lookup['status']) {
+            return;
+        }
+
+        if (empty($lookup['transaction_id'])) {
+            $this->log('Khalti timeout reconcile: Completed without transaction_id.', $attendee_id, $lookup);
+            return;
+        }
+
+        $order = $this->get_order($payment_token);
+        if (empty($order)) {
+            return;
+        }
+
+        $expected_amount = (int) round(((float) $order['total']) * 100);
+        $paid_amount     = isset($lookup['total_amount']) ? (int) $lookup['total_amount'] : 0;
+        if ($paid_amount !== $expected_amount) {
+            $this->log(
+                'Khalti timeout reconcile: amount mismatch.',
+                $attendee_id,
+                compact('expected_amount', 'paid_amount', 'lookup')
+            );
+            return;
+        }
+
+        $payment_data = array(
+            'transaction_id'      => sanitize_text_field($lookup['transaction_id']),
+            'transaction_details' => $lookup,
+        );
+
+        $this->payment_result(
+            $payment_token,
+            CampTix_Plugin::PAYMENT_STATUS_COMPLETED,
+            $payment_data,
+            false // Non-interactive: do not redirect.
+        );
     }
 
     /**
@@ -482,9 +546,8 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
         $result = json_decode(wp_remote_retrieve_body($remote_response), true);
 
         if (! empty($result['pidx']) && ! empty($result['payment_url'])) {
-            update_post_meta(
-                $order['attendee_id'],
-                self::META_PIDX,
+            $this->store_pidx_for_payment_token(
+                $payment_token,
                 sanitize_text_field($result['pidx'])
             );
             $this->output_khalti_redirect_page(esc_url_raw($result['payment_url']));
@@ -564,6 +627,35 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             $result
         );
         return false;
+    }
+
+    /**
+     * Store the Khalti pidx on every attendee in the CampTix order.
+     *
+     * Timeout runs per attendee; meta must exist on each so a sibling cannot be
+     * marked timeout before the buyer is reconciled (SurjoPay-style).
+     *
+     * @param string $payment_token CampTix payment token.
+     * @param string $pidx          Khalti payment identifier from initiate.
+     * @return void
+     */
+    private function store_pidx_for_payment_token($payment_token, $pidx)
+    {
+        global $camptix;
+
+        $pidx = sanitize_text_field($pidx);
+        if ('' === $payment_token || '' === $pidx) {
+            return;
+        }
+
+        $attendees = $camptix->get_attendees_from_payment_token($payment_token);
+        if (empty($attendees)) {
+            return;
+        }
+
+        foreach ($attendees as $attendee) {
+            update_post_meta($attendee->ID, self::META_PIDX, $pidx);
+        }
     }
 
     /**
