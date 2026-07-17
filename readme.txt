@@ -73,8 +73,9 @@ Nothing here
 == Changelog ==
 
 = 1.1.0 =
-* Add Fonepay QR payment gateway (Intent QR checkout with WebSocket and status API confirmation)
-* Include human-readable QR rendering library (qrcode.js, MIT license)
+* Add Fonepay QR payment gateway
+* Harden Khalti payment return and status handling
+* Add pre_attendee_timeout hook for Khalti and Fonepay
 
 = 1.0.2 =
 * Add amount_breakdown and product_details with validation fix for phone numbers
@@ -92,4 +93,4 @@ Nothing here
 == Upgrade Notice ==
 
 = 1.1.0 =
-Adds Fonepay QR payment gateway support for CampTix NPR checkouts.
+Adds Fonepay QR and improves Khalti payment reliability.
