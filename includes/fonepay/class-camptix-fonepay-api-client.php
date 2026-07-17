@@ -232,7 +232,7 @@ class CampTix_Fonepay_Api_Client {
 					'Content-Type'  => 'application/json',
 				),
 				'body'     => $payload,
-				'timeout'  => 15,
+				'timeout'  => 30,
 				'blocking' => true,
 			)
 		);
@@ -324,7 +324,7 @@ class CampTix_Fonepay_Api_Client {
 					'Content-Type'  => 'application/json',
 				),
 				'body'     => $json_body,
-				'timeout'  => 15,
+				'timeout'  => 30,
 				'blocking' => true,
 			)
 		);
