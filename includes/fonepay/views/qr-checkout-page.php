@@ -16,11 +16,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-$logo_url     = isset( $data['logoUrl'] ) ? $data['logoUrl'] : '';
-$event_name   = isset( $data['eventName'] ) ? $data['eventName'] : '';
-$ticket_items = ( isset( $data['ticketItems'] ) && is_array( $data['ticketItems'] ) ) ? $data['ticketItems'] : array();
-$attendees    = ( isset( $data['attendees'] ) && is_array( $data['attendees'] ) ) ? $data['attendees'] : array();
-$has_order    = ( $event_name || $ticket_items || $attendees );
+$camptix_fonepay_logo_url     = isset( $data['logoUrl'] ) ? $data['logoUrl'] : '';
+$camptix_fonepay_event_name   = isset( $data['eventName'] ) ? $data['eventName'] : '';
+$camptix_fonepay_ticket_items = ( isset( $data['ticketItems'] ) && is_array( $data['ticketItems'] ) ) ? $data['ticketItems'] : array();
+$camptix_fonepay_attendees    = ( isset( $data['attendees'] ) && is_array( $data['attendees'] ) ) ? $data['attendees'] : array();
+$camptix_fonepay_has_order    = ( $camptix_fonepay_event_name || $camptix_fonepay_ticket_items || $camptix_fonepay_attendees );
 
 ?>
 <!DOCTYPE html>
@@ -37,7 +37,7 @@ $has_order    = ( $event_name || $ticket_items || $attendees );
 </head>
 
 <body class="camptix-fonepay-body">
-	<div class="camptix-fonepay-shell<?php echo $has_order ? ' has-order' : ''; ?>">
+	<div class="camptix-fonepay-shell<?php echo $camptix_fonepay_has_order ? ' has-order' : ''; ?>">
 		<div class="camptix-fonepay-layout">
 			<div class="camptix-fonepay-main">
 				<div class="camptix-fonepay-topbar">
@@ -57,10 +57,10 @@ $has_order    = ( $event_name || $ticket_items || $attendees );
 						?>
 					</p>
 
-					<?php if ( $logo_url ) : ?>
+					<?php if ( $camptix_fonepay_logo_url ) : ?>
 						<img
 							class="camptix-fonepay-logo"
-							src="<?php echo esc_url( $logo_url ); ?>"
+							src="<?php echo esc_url( $camptix_fonepay_logo_url ); ?>"
 							alt="<?php esc_attr_e( 'Checkout by Fonepay', 'nepali-payments-for-camptix' ); ?>"
 							width="220"
 							height="52"
@@ -102,17 +102,17 @@ $has_order    = ( $event_name || $ticket_items || $attendees );
 				</div>
 			</div>
 
-			<?php if ( $has_order ) : ?>
+			<?php if ( $camptix_fonepay_has_order ) : ?>
 				<aside class="camptix-fonepay-order" aria-label="<?php esc_attr_e( 'Order summary', 'nepali-payments-for-camptix' ); ?>">
 					<p class="camptix-fonepay-order-heading"><?php esc_html_e( 'Order summary', 'nepali-payments-for-camptix' ); ?></p>
 
-					<?php if ( $event_name ) : ?>
-						<p class="camptix-fonepay-event"><?php echo esc_html( $event_name ); ?></p>
+					<?php if ( $camptix_fonepay_event_name ) : ?>
+						<p class="camptix-fonepay-event"><?php echo esc_html( $camptix_fonepay_event_name ); ?></p>
 					<?php endif; ?>
 
-					<?php if ( $ticket_items ) : ?>
+					<?php if ( $camptix_fonepay_ticket_items ) : ?>
 						<ul class="camptix-fonepay-tickets">
-							<?php foreach ( $ticket_items as $item ) : ?>
+							<?php foreach ( $camptix_fonepay_ticket_items as $camptix_fonepay_item ) : ?>
 								<li>
 									<span>
 										<?php
@@ -120,8 +120,8 @@ $has_order    = ( $event_name || $ticket_items || $attendees );
 											sprintf(
 												/* translators: 1: ticket name, 2: quantity */
 												__( '%1$s × %2$d', 'nepali-payments-for-camptix' ),
-												$item['name'],
-												(int) $item['quantity']
+												$camptix_fonepay_item['name'],
+												(int) $camptix_fonepay_item['quantity']
 											)
 										);
 										?>
@@ -131,7 +131,7 @@ $has_order    = ( $event_name || $ticket_items || $attendees );
 										printf(
 											/* translators: %s: line-item amount */
 											esc_html__( 'NPR %s', 'nepali-payments-for-camptix' ),
-											esc_html( number_format( (float) $item['price'] * (int) $item['quantity'], 2 ) )
+											esc_html( number_format( (float) $camptix_fonepay_item['price'] * (int) $camptix_fonepay_item['quantity'], 2 ) )
 										);
 										?>
 									</span>
@@ -140,13 +140,13 @@ $has_order    = ( $event_name || $ticket_items || $attendees );
 						</ul>
 					<?php endif; ?>
 
-					<?php if ( $attendees ) : ?>
+					<?php if ( $camptix_fonepay_attendees ) : ?>
 						<ul class="camptix-fonepay-attendees">
-							<?php foreach ( $attendees as $attendee ) : ?>
+							<?php foreach ( $camptix_fonepay_attendees as $camptix_fonepay_attendee ) : ?>
 								<li>
-									<span><?php echo esc_html( $attendee['name'] ); ?></span>
-									<?php if ( ! empty( $attendee['ticket'] ) ) : ?>
-										<span class="camptix-fonepay-meta"><?php echo esc_html( $attendee['ticket'] ); ?></span>
+									<span><?php echo esc_html( $camptix_fonepay_attendee['name'] ); ?></span>
+									<?php if ( ! empty( $camptix_fonepay_attendee['ticket'] ) ) : ?>
+										<span class="camptix-fonepay-meta"><?php echo esc_html( $camptix_fonepay_attendee['ticket'] ); ?></span>
 									<?php endif; ?>
 								</li>
 							<?php endforeach; ?>
