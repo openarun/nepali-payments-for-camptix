@@ -141,12 +141,15 @@ class CampTix_Fonepay_Key_Store {
 	/**
 	 * Forward a log message to the injected logger when present.
 	 *
+	 * Always passes three arguments so CampTix_Payment_Method::__call() records
+	 * the entry under the payment module (not a bogus post ID).
+	 *
 	 * @param string $message Log message.
 	 * @return void
 	 */
 	protected function log( $message ) {
 		if ( null !== $this->logger ) {
-			call_user_func( $this->logger, $message );
+			call_user_func( $this->logger, $message, null, null );
 		}
 	}
 }

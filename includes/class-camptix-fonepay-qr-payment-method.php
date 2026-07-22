@@ -80,6 +80,13 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	const QR_SESSION_TTL = 30 * MINUTE_IN_SECONDS;
 
 	/**
+	 * Minimum seconds between outbound Fonepay status API calls per payment token.
+	 *
+	 * @var int
+	 */
+	const STATUS_AJAX_THROTTLE_SECONDS = 5;
+
+	/**
 	 * Nonce actions for first-party Fonepay QR routes (bound to user + session).
 	 *
 	 * @var string
@@ -178,21 +185,28 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	}
 
 	/**
-	 * Render a masked password input for a settings field.
+	 * Render a write-only password input for a settings field.
+	 *
+	 * The saved password is never echoed back. Enter a new value only to replace it.
 	 *
 	 * @param array $args Settings field arguments from add_settings_field_helper().
 	 * @return void
 	 */
 	public function field_password( $args ) {
+		$has_password = ! empty( $this->options['password'] );
 		?>
 		<input
 			type="password"
 			name="<?php echo esc_attr( $args['name'] ); ?>"
-			value="<?php echo esc_attr( $args['value'] ); ?>"
+			value=""
 			class="regular-text"
 			autocomplete="new-password"
 			spellcheck="false"
+			placeholder="<?php echo esc_attr( $has_password ? __( 'Password is saved. Enter a new password only to replace it.', 'nepali-payments-for-camptix' ) : '' ); ?>"
 		/>
+		<?php if ( $has_password ) : ?>
+			<p class="description"><?php esc_html_e( 'A password is already stored. Leave this field empty to keep the current password.', 'nepali-payments-for-camptix' ); ?></p>
+		<?php endif; ?>
 		<?php if ( ! empty( $args['description'] ) ) : ?>
 			<p class="description"><?php echo esc_html( $args['description'] ); ?></p>
 		<?php endif; ?>
@@ -243,7 +257,10 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 			$output['username'] = sanitize_text_field( $input['username'] );
 		}
 		if ( isset( $input['password'] ) ) {
-			$output['password'] = sanitize_text_field( $input['password'] );
+			$submitted_password = sanitize_text_field( $input['password'] );
+			if ( '' !== $submitted_password ) {
+				$output['password'] = $submitted_password;
+			}
 		}
 		if ( isset( $input['private_key'] ) ) {
 			$submitted_key = trim( sanitize_textarea_field( $input['private_key'] ) );
@@ -333,9 +350,12 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 			return;
 		}
 
-		if ( ! $this->payment_amount_matches_order( $payment_token, $status_result ) ) {
+		$amount_ok = $this->payment_amount_matches_order( $payment_token, $status_result );
+		if ( true !== $amount_ok ) {
 			$this->log(
-				'Fonepay timeout reconcile: amount mismatch.',
+				null === $amount_ok
+					? 'Fonepay timeout reconcile: amount unverifiable; leaving draft.'
+					: 'Fonepay timeout reconcile: amount mismatch.',
 				$attendee_id,
 				array(
 					'payment_token'   => $payment_token,
@@ -447,6 +467,12 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 			return false;
 		}
 
+		// Final availability check before the buyer is sent to pay.
+		if ( ! $camptix->verify_order( $order ) ) {
+			$this->log( 'Could not verify CampTix order before Fonepay checkout.', $order['attendee_id'] );
+			return $this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED );
+		}
+
 		$total_amount = round( (float) $order['total'], 2 );
 		if ( $total_amount < 1 || $total_amount > 9999999 ) {
 			$camptix->error( esc_html__( 'Payment amount is outside the range supported by Fonepay.', 'nepali-payments-for-camptix' ) );
@@ -481,6 +507,8 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	 */
 	public function payment_qr_page() {
 		global $camptix;
+
+		nocache_headers();
 
 		if ( ! $this->verify_request_nonce( self::NONCE_ACTION_QR ) ) {
 			$this->reject_invalid_nonce();
@@ -519,12 +547,19 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	/**
 	 * Single on-demand status check triggered by the "Check Status" button.
 	 *
-	 * Returns the normalized status as JSON. Does not change the order state; the
-	 * front-end only navigates to payment_return when the status is success.
+	 * Resolves the payment token to a draft/pending attendee of this gateway and
+	 * applies a short per-token throttle before calling Fonepay. Returns the
+	 * normalized status as JSON. Does not change the order state; the front-end
+	 * only navigates to payment_return when the status is success (or when the
+	 * WebSocket reports payment failure).
 	 *
 	 * @return void
 	 */
 	public function payment_status_ajax() {
+		global $camptix;
+
+		nocache_headers();
+
 		if ( ! $this->verify_request_nonce( self::NONCE_ACTION_STATUS ) ) {
 			wp_send_json( array( 'status' => 'unknown' ), 403 );
 		}
@@ -532,6 +567,21 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 		$payment_token = $this->get_request_payment_token();
 		if ( empty( $payment_token ) ) {
 			wp_send_json( array( 'status' => 'unknown' ) );
+		}
+
+		$attendees = $camptix->get_attendees_from_payment_token( $payment_token );
+		if ( empty( $attendees ) || ! in_array( $attendees[0]->post_status, array( 'draft', 'pending' ), true ) ) {
+			wp_send_json( array( 'status' => 'unknown' ) );
+		}
+
+		if ( $this->id !== get_post_meta( $attendees[0]->ID, 'tix_payment_method', true ) ) {
+			wp_send_json( array( 'status' => 'unknown' ) );
+		}
+
+		$throttle_key = 'camptix_fonepay_status_' . md5( $payment_token );
+		$cached       = get_transient( $throttle_key );
+		if ( false !== $cached && is_array( $cached ) && isset( $cached['status'] ) ) {
+			wp_send_json( array( 'status' => (string) $cached['status'] ) );
 		}
 
 		$reference_label = $this->get_fonepay_reference_label( $payment_token );
@@ -545,9 +595,16 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 			wp_send_json( array( 'status' => 'unknown' ) );
 		}
 
-		$status = $api_client->get_payment_status( $access_token, $reference_label );
+		$status_result = $api_client->get_payment_status( $access_token, $reference_label );
+		$status        = isset( $status_result['status'] ) ? (string) $status_result['status'] : 'unknown';
 
-		wp_send_json( array( 'status' => $status['status'] ) );
+		set_transient(
+			$throttle_key,
+			array( 'status' => $status ),
+			self::STATUS_AJAX_THROTTLE_SECONDS
+		);
+
+		wp_send_json( array( 'status' => $status ) );
 	}
 
 	/**
@@ -619,6 +676,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 				'paymentFailedReturn' => __( 'Payment failed or was cancelled. Redirecting...', 'nepali-payments-for-camptix' ),
 				'paymentFailedStay'   => __( 'Payment failed or was cancelled. Please start a new payment.', 'nepali-payments-for-camptix' ),
 				'paymentNotReceived'  => __( "We haven't received your payment yet. Complete the payment in your app, then click the button again.", 'nepali-payments-for-camptix' ),
+				'paymentConfigError'  => __( 'Payment status is temporarily unavailable. Please contact the event organizer if you have already paid.', 'nepali-payments-for-camptix' ),
 			),
 		);
 	}
@@ -816,6 +874,21 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 		switch ( $status ) {
 			case 'success':
 				$amount_ok = $this->payment_amount_matches_order( $payment_token, $status_result );
+
+				if ( null === $amount_ok ) {
+					// Success reported but amount unverifiable — leave draft for reconcile.
+					$this->log(
+						'Fonepay reported success but amount could not be verified; leaving order as draft.',
+						null,
+						array(
+							'payment_token' => $payment_token,
+							'status'        => $status_result,
+						)
+					);
+					wp_safe_redirect( esc_url_raw( $this->get_tickets_url() ) );
+					exit;
+				}
+
 				if ( ! $amount_ok ) {
 					$this->log(
 						'Fonepay payment amount does not match the CampTix order total; marking failed.',
@@ -825,14 +898,13 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 							'status'        => $status_result,
 						)
 					);
+					$this->clear_qr_session( $payment_token );
+					$this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data );
+					break;
 				}
 
 				$this->clear_qr_session( $payment_token );
-				$this->payment_result(
-					$payment_token,
-					$amount_ok ? CampTix_Plugin::PAYMENT_STATUS_COMPLETED : CampTix_Plugin::PAYMENT_STATUS_FAILED,
-					$payment_data
-				);
+				$this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_COMPLETED, $payment_data );
 				break;
 
 			case 'failed':
@@ -844,14 +916,26 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 				// Intent QR "pending" means unpaid / in-flight — leave draft; do not issue tickets.
 			case 'timeout':
 			case 'not_found':
+			case 'config_error':
 			default:
-				$this->log(
-					sprintf(
-						'Fonepay payment not confirmed for reference %s (status: %s)',
-						esc_html( $reference_label ),
-						esc_html( $status )
-					)
-				);
+				if ( 'config_error' === $status ) {
+					$this->log(
+						sprintf(
+							'Fonepay terminal configuration error for reference %s; leaving order as draft.',
+							esc_html( $reference_label )
+						),
+						null,
+						$status_result
+					);
+				} else {
+					$this->log(
+						sprintf(
+							'Fonepay payment not confirmed for reference %s (status: %s)',
+							esc_html( $reference_label ),
+							esc_html( $status )
+						)
+					);
+				}
 				wp_safe_redirect( esc_url_raw( $this->get_tickets_url() ) );
 				exit;
 		}
@@ -862,24 +946,54 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	 *
 	 * @param string $payment_token Payment token.
 	 * @param array  $status_result Result from get_payment_status().
-	 * @return bool
+	 * @return bool|null True if match, false if mismatch, null if amount unverifiable.
 	 */
 	protected function payment_amount_matches_order( $payment_token, array $status_result ) {
 		$order = $this->get_order( $payment_token );
 		if ( empty( $order ) || ! isset( $order['total'] ) ) {
-			return false;
+			return null;
 		}
 
 		$response = ( isset( $status_result['response'] ) && is_array( $status_result['response'] ) )
 			? $status_result['response']
 			: array();
 
-		$paid = $this->fonepay_response_string( $response, array( 'totalTransactionAmount' ) );
+		$paid = $this->fonepay_response_string(
+			$response,
+			array( 'totalTransactionAmount', 'requestedAmount' )
+		);
 		if ( '' === $paid ) {
-			return false;
+			return null;
 		}
 
-		return (int) round( (float) $paid * 100 ) === (int) round( (float) $order['total'] * 100 );
+		$paid_npr = $this->parse_fonepay_amount_npr( $paid );
+		if ( null === $paid_npr ) {
+			return null;
+		}
+
+		return (int) round( $paid_npr * 100 ) === (int) round( (float) $order['total'] * 100 );
+	}
+
+	/**
+	 * Parse a Fonepay amount string into NPR as a float.
+	 *
+	 * Accepts documented values like "100.00" and strips common noise (commas, currency labels).
+	 *
+	 * @param string $raw Raw amount string from the status API.
+	 * @return float|null Parsed NPR amount, or null if unusable.
+	 */
+	protected function parse_fonepay_amount_npr( $raw ) {
+		$normalized = preg_replace( '/[^0-9.]/', '', (string) $raw );
+		if ( null === $normalized || '' === $normalized || '.' === $normalized ) {
+			return null;
+		}
+
+		// Reject multiple decimal points (e.g. mangled "1.234.50").
+		if ( substr_count( $normalized, '.' ) > 1 ) {
+			return null;
+		}
+
+		return (float) $normalized;
 	}
 
 	/**

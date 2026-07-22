@@ -445,10 +445,19 @@ class CampTix_Fonepay_Api_Client {
 			return $empty;
 		}
 
-		// 409 = "Terminal detail not found"; treated as no payment received yet.
+		// Status API 409 = "Terminal detail not found" (misconfigured terminal_id).
 		if ( 409 === $response_code ) {
+			$this->log(
+				'Fonepay status returned HTTP 409 Terminal detail not found; check terminal_id.',
+				null,
+				array(
+					'http_status' => $response_code,
+					'terminal_id' => isset( $this->options['terminal_id'] ) ? $this->options['terminal_id'] : '',
+					'response'    => $result,
+				)
+			);
 			return array(
-				'status'   => 'not_found',
+				'status'   => 'config_error',
 				'response' => $result,
 			);
 		}
@@ -461,8 +470,20 @@ class CampTix_Fonepay_Api_Client {
 			);
 		}
 
+		$raw_status = preg_replace( '/\s+/', ' ', strtolower( trim( (string) $result['paymentStatus'] ) ) );
+		$allowed    = array( 'success', 'pending', 'failed', 'timeout' );
+		$status     = in_array( $raw_status, $allowed, true ) ? $raw_status : 'unknown';
+
+		if ( 'unknown' === $status && '' !== $raw_status ) {
+			$this->log(
+				sprintf( 'Fonepay returned unrecognized paymentStatus "%s".', esc_html( $raw_status ) ),
+				null,
+				$result
+			);
+		}
+
 		return array(
-			'status'   => strtolower( trim( (string) $result['paymentStatus'] ) ),
+			'status'   => $status,
 			'response' => $result,
 		);
 	}

@@ -299,12 +299,6 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                     return;
                 }
 
-                if (! $camptix->verify_order($order)) {
-                    $this->log('Could not verify CampTix order before completing Khalti payment.', $order['attendee_id']);
-                    $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data);
-                    return;
-                }
-
                 $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_COMPLETED, $payment_data);
                 break;
             case 'Expired':
@@ -546,10 +540,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
         $result = json_decode(wp_remote_retrieve_body($remote_response), true);
 
         if (! empty($result['pidx']) && ! empty($result['payment_url'])) {
-            $this->store_pidx_for_payment_token(
-                $payment_token,
-                sanitize_text_field($result['pidx'])
-            );
+            $this->save_pidx_on_order_attendees($payment_token, $result['pidx']);
             $this->output_khalti_redirect_page(esc_url_raw($result['payment_url']));
             die();
         }
@@ -630,20 +621,19 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
     }
 
     /**
-     * Store the Khalti pidx on every attendee in the CampTix order.
-     *
-     * Timeout runs per attendee; meta must exist on each so a sibling cannot be
-     * marked timeout before the buyer is reconciled (SurjoPay-style).
+     * Save Khalti pidx on every attendee in the order.
      *
      * @param string $payment_token CampTix payment token.
      * @param string $pidx          Khalti payment identifier from initiate.
      * @return void
      */
-    private function store_pidx_for_payment_token($payment_token, $pidx)
+    private function save_pidx_on_order_attendees($payment_token, $pidx)
     {
         global $camptix;
 
-        $pidx = sanitize_text_field($pidx);
+        $payment_token = sanitize_text_field($payment_token);
+        $pidx          = sanitize_text_field($pidx);
+
         if ('' === $payment_token || '' === $pidx) {
             return;
         }

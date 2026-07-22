@@ -2,8 +2,9 @@
 Contributors: arunpyasi
 Tags: camptix, nepali, payments, gateway
 Requires at least: 4.7.0
+Requires PHP: 7.1
 Tested up to: 7.0
-Stable tag: 1.1.0
+Stable tag: 1.1.1
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -72,6 +73,13 @@ Nothing here
 
 == Changelog ==
 
+= 1.1.1 =
+* Fix Khalti completing paid orders when CampTix verify_order fails after payment
+* Verify CampTix order before Fonepay QR checkout
+* Harden Fonepay status checks: require a matching draft/pending order, throttle requests, and treat unverifiable amounts as draft
+* Improve Fonepay amount parsing and terminal configuration error handling
+* Declare Requires PHP 7.1
+
 = 1.1.0 =
 * Add Fonepay QR payment gateway
 * Harden Khalti payment return and status handling
@@ -91,6 +99,9 @@ Nothing here
 * NPR currency support
 
 == Upgrade Notice ==
+
+= 1.1.1 =
+Fixes Khalti payment completion and hardens Fonepay QR status handling.
 
 = 1.1.0 =
 Adds Fonepay QR and improves Khalti payment reliability.

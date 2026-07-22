@@ -3,9 +3,9 @@
  *
  * Renders the Fonepay QR and listens on the Fonepay WebSocket for real-time
  * payment updates. A manual "Check Status" button performs a single
- * (non-polling) server-side status check. The customer is only sent to the
- * finalize step when the payment is actually successful; other states show a
- * message and leave the order unchanged.
+ * server-side status check. Success (and WebSocket payment failure) navigate
+ * to payment_return to finalize; other button results only update the status
+ * message and leave the draft order in place.
  */
 (function () {
 	if (typeof camptixFonepayData === 'undefined' || !camptixFonepayData.qrString) {
@@ -128,13 +128,17 @@
 	}
 
 	function connectWebSocket() {
-		if (!data.websocketId) {
+		var wsUrl = data.websocketId || '';
+		if (!wsUrl || !/^wss?:\/\//i.test(wsUrl)) {
 			return;
 		}
 		try {
-			socket = new WebSocket(data.websocketId);
+			socket = new WebSocket(wsUrl);
 		} catch (e) {
-			// ws:// may be blocked as mixed content over HTTPS; use the button instead.
+			// Mixed-content or invalid URL; Check Status remains the fallback.
+			if (typeof console !== 'undefined' && console.warn) {
+				console.warn('Fonepay WebSocket unavailable; use Check Status.', e);
+			}
 			return;
 		}
 
@@ -166,7 +170,9 @@
 		};
 
 		socket.onerror = function () {
-			// Silent; the manual verify button is available as a fallback.
+			if (typeof console !== 'undefined' && console.warn) {
+				console.warn('Fonepay WebSocket error; use Check Status.');
+			}
 		};
 	}
 
@@ -205,6 +211,8 @@
 
 			if (status === 'failed') {
 				setStatus(i18n.paymentFailedStay || 'Payment failed or was cancelled. Please start a new payment.');
+			} else if (status === 'config_error') {
+				setStatus(i18n.paymentConfigError || 'Payment status is temporarily unavailable. Please contact the event organizer if you have already paid.');
 			} else {
 				// timeout / pending / not_found / unknown — treat as not paid yet.
 				setStatus(i18n.paymentNotReceived || "We haven't received your payment yet. Complete the payment in your app, then click the button again.");
