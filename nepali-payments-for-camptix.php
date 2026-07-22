@@ -1,9 +1,10 @@
 <?php
 /*
  * Plugin Name: Nepali Payments for CampTix
+ * Plugin URI: https://github.com/openarun/nepali-payments-for-camptix
  * Description: Nepali Payment Gateways for CampTix - Accept payments in Nepali Rupees (NPR)
  * Author: Arun Kumar Pariyar
- * Author URI: http://github.com/openarun
+ * Author URI: https://github.com/openarun
  * Text Domain: nepali-payments-for-camptix
  * Version: 1.1.1
  * Requires at least: 4.7.0

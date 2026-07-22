@@ -14,6 +14,8 @@ Add Nepali payment gateway support to CampTix for accepting payments in Nepali R
 
 Nepali Payments for CampTix adds Nepali payment gateways support to the CampTix plugin, allowing you to accept payments in Nepali Rupees (NPR).
 
+Development of this plugin is on [GitHub](https://github.com/openarun/nepali-payments-for-camptix).
+
 = Supported Payment Gateways =
 * [Khalti](https://khalti.com/)
 * [Fonepay QR](https://fonepay.com/)
