@@ -195,16 +195,16 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             }
 
             // Glued method+pidx must pass through for the split below.
-            if ('tix_payment_method' === $fixed && is_string($_GET[$key])) {
-                $method_candidate = wp_unslash($_GET[$key]);
+            if ('tix_payment_method' === $fixed && isset($_GET[$key]) && is_string($_GET[$key])) {
+                $method_candidate = sanitize_text_field(wp_unslash($_GET[$key]));
                 if (false !== strpos($method_candidate, '?') && 0 === strpos($method_candidate, $this->id)) {
                     $_GET[$fixed] = $method_candidate;
                     continue;
                 }
             }
 
-            if (is_string($_GET[$key])) {
-                $_GET[$fixed] = wp_unslash($_GET[$key]);
+            if (isset($_GET[$key]) && is_string($_GET[$key])) {
+                $_GET[$fixed] = sanitize_text_field(wp_unslash($_GET[$key]));
             }
         }
 
@@ -212,7 +212,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             return;
         }
 
-        $method_raw = wp_unslash($_GET['tix_payment_method']);
+        $method_raw = sanitize_text_field(wp_unslash($_GET['tix_payment_method']));
         if (false === strpos($method_raw, '?') || 0 !== strpos($method_raw, $this->id)) {
             return;
         }
@@ -321,6 +321,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                 'posts_per_page' => 1,
                 'post_type'      => 'tix_attendee',
                 'post_status'    => array('publish', 'pending', 'refund'),
+                // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Single-row tix_payment_token lookup; core FAILED has no finalize guard.
                 'meta_query'     => array(
                     array(
                         'key'   => 'tix_payment_token',

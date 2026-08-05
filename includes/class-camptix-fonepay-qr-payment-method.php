@@ -456,6 +456,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 				'posts_per_page' => 1,
 				'post_type'      => 'tix_attendee',
 				'post_status'    => array( 'publish', 'pending', 'refund' ),
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Single-row tix_payment_token lookup; core FAILED has no finalize guard.
 				'meta_query'     => array(
 					array(
 						'key'   => 'tix_payment_token',
