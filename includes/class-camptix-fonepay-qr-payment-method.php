@@ -87,7 +87,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	const STATUS_AJAX_THROTTLE_SECONDS = 5;
 
 	/**
-	 * Nonce actions for first-party Fonepay QR routes (bound to user + session).
+	 * Nonce action prefixes.
 	 *
 	 * @var string
 	 */
@@ -95,6 +95,13 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	const NONCE_ACTION_STATUS = 'camptix_fonepay_qr_status';
 	const NONCE_ACTION_RETURN = 'camptix_fonepay_qr_return';
 	const NONCE_ACTION_QR     = 'camptix_fonepay_qr_page';
+
+	/**
+	 * Tokens reconciled in this timeout sweep.
+	 *
+	 * @var array<string, true>
+	 */
+	protected static $timeout_reconciled_tokens = array();
 
 	/**
 	 * Initialize the gateway
@@ -333,6 +340,11 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 			return;
 		}
 
+		if ( isset( self::$timeout_reconciled_tokens[ $payment_token ] ) ) {
+			return;
+		}
+		self::$timeout_reconciled_tokens[ $payment_token ] = true;
+
 		$reference_label = $this->get_fonepay_reference_label( $payment_token );
 		if ( '' === $reference_label ) {
 			return;
@@ -376,6 +388,17 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	}
 
 	/**
+	 * Token-bound nonce action.
+	 *
+	 * @param string $action_prefix One of the NONCE_ACTION_* constants.
+	 * @param string $payment_token Payment token.
+	 * @return string
+	 */
+	protected function get_nonce_action( $action_prefix, $payment_token ) {
+		return $action_prefix . '_' . hash( 'sha256', (string) $payment_token );
+	}
+
+	/**
 	 * Whether the request carries a valid WP nonce for the given action.
 	 *
 	 * @param string $action Nonce action name.
@@ -398,10 +421,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	}
 
 	/**
-	 * Attach a session-bound WP nonce to a Fonepay callback URL.
-	 *
-	 * Uses add_query_arg (not wp_nonce_url) so the result stays a raw URL suitable
-	 * for redirects and XHR, rather than an HTML-escaped string.
+	 * Attach a WP nonce to a Fonepay callback URL.
 	 *
 	 * @param string $url    Absolute URL.
 	 * @param string $action Nonce action name.
@@ -412,32 +432,80 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	}
 
 	/**
-	 * Read the payment token from the request after a nonce has been verified.
+	 * Read the payment token from the request.
 	 *
 	 * @return string
 	 */
 	protected function get_request_payment_token() {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Caller verifies the route nonce first.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Caller verifies nonce next.
 		return isset( $_REQUEST['tix_payment_token'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['tix_payment_token'] ) ) : '';
+	}
+
+	/**
+	 * FAILED unless attendees already publish/pending/refund.
+	 *
+	 * @param string $payment_token Payment token.
+	 * @param array  $payment_data  Optional payment data for payment_result().
+	 * @param bool   $interactive   Whether to redirect.
+	 * @return mixed
+	 */
+	protected function payment_result_failed( $payment_token, $payment_data = array(), $interactive = true ) {
+		// Uncached status check.
+		$finalized = get_posts(
+			array(
+				'posts_per_page' => 1,
+				'post_type'      => 'tix_attendee',
+				'post_status'    => array( 'publish', 'pending', 'refund' ),
+				'meta_query'     => array(
+					array(
+						'key'   => 'tix_payment_token',
+						'value' => $payment_token,
+					),
+				),
+			)
+		);
+
+		if ( ! empty( $finalized ) ) {
+			$attendee = $finalized[0];
+			$this->log(
+				sprintf( 'Refusing to mark payment failed; attendee already in %s status.', $attendee->post_status ),
+				$attendee->ID,
+				$payment_data
+			);
+
+			if ( ! $interactive ) {
+				return false;
+			}
+
+			if ( in_array( $attendee->post_status, array( 'publish', 'pending' ), true ) ) {
+				$access_token = get_post_meta( $attendee->ID, 'tix_access_token', true );
+				$url          = add_query_arg(
+					array(
+						'tix_action'       => 'access_tickets',
+						'tix_access_token' => $access_token,
+					),
+					$this->get_tickets_url()
+				);
+				wp_safe_redirect( $url . '#tix' );
+				exit;
+			}
+
+			wp_safe_redirect( esc_url_raw( $this->get_tickets_url() ) );
+			exit;
+		}
+
+		return $this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data, $interactive );
 	}
 
 	/**
 	 * Handle a cancelled payment from the QR checkout Cancel link.
 	 *
-	 * Marks draft attendees as cancelled via CampTix, matching other gateways.
-	 * Requires a WordPress nonce tied to the current user session.
-	 *
 	 * @return mixed
 	 */
 	public function payment_cancel() {
-		if ( ! $this->verify_request_nonce( self::NONCE_ACTION_CANCEL ) ) {
-			$this->reject_invalid_nonce();
-		}
-
 		$payment_token = $this->get_request_payment_token();
-		if ( empty( $payment_token ) ) {
-			wp_safe_redirect( esc_url_raw( $this->get_tickets_url() ) );
-			exit;
+		if ( empty( $payment_token ) || ! $this->verify_request_nonce( $this->get_nonce_action( self::NONCE_ACTION_CANCEL, $payment_token ) ) ) {
+			$this->reject_invalid_nonce();
 		}
 
 		$this->clear_qr_session( $payment_token );
@@ -470,25 +538,25 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 		// Final availability check before the buyer is sent to pay.
 		if ( ! $camptix->verify_order( $order ) ) {
 			$this->log( 'Could not verify CampTix order before Fonepay checkout.', $order['attendee_id'] );
-			return $this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED );
+			return $this->payment_result_failed( $payment_token );
 		}
 
 		$total_amount = round( (float) $order['total'], 2 );
 		if ( $total_amount < 1 || $total_amount > 9999999 ) {
 			$camptix->error( esc_html__( 'Payment amount is outside the range supported by Fonepay.', 'nepali-payments-for-camptix' ) );
-			return $this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED );
+			return $this->payment_result_failed( $payment_token );
 		}
 
 		$api_client = $this->get_api_client();
 		if ( false === $api_client->get_access_token() ) {
 			$camptix->error( esc_html__( 'Could not authenticate with Fonepay. Please try again.', 'nepali-payments-for-camptix' ) );
-			return $this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED );
+			return $this->payment_result_failed( $payment_token );
 		}
 
 		$qr_page_data = $this->create_intent_qr_page_data( $payment_token, $order );
 		if ( false === $qr_page_data ) {
 			$camptix->error( esc_html__( 'Could not generate a Fonepay QR. Please try again.', 'nepali-payments-for-camptix' ) );
-			return $this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED );
+			return $this->payment_result_failed( $payment_token );
 		}
 
 		$this->store_qr_session( $payment_token, $qr_page_data );
@@ -510,14 +578,9 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 
 		nocache_headers();
 
-		if ( ! $this->verify_request_nonce( self::NONCE_ACTION_QR ) ) {
-			$this->reject_invalid_nonce();
-		}
-
 		$payment_token = $this->get_request_payment_token();
-		if ( empty( $payment_token ) ) {
-			wp_safe_redirect( esc_url_raw( $this->get_tickets_url() ) );
-			exit;
+		if ( empty( $payment_token ) || ! $this->verify_request_nonce( $this->get_nonce_action( self::NONCE_ACTION_QR, $payment_token ) ) ) {
+			$this->reject_invalid_nonce();
 		}
 
 		$attendees = $camptix->get_attendees_from_payment_token( $payment_token );
@@ -560,13 +623,9 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 
 		nocache_headers();
 
-		if ( ! $this->verify_request_nonce( self::NONCE_ACTION_STATUS ) ) {
-			wp_send_json( array( 'status' => 'unknown' ), 403 );
-		}
-
 		$payment_token = $this->get_request_payment_token();
-		if ( empty( $payment_token ) ) {
-			wp_send_json( array( 'status' => 'unknown' ) );
+		if ( empty( $payment_token ) || ! $this->verify_request_nonce( $this->get_nonce_action( self::NONCE_ACTION_STATUS, $payment_token ) ) ) {
+			wp_send_json( array( 'status' => 'unknown' ), 403 );
 		}
 
 		$attendees = $camptix->get_attendees_from_payment_token( $payment_token );
@@ -618,11 +677,11 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	}
 
 	/**
-	 * Build a first-party Fonepay action URL with a session nonce.
+	 * Build a Fonepay action URL with a token-bound nonce.
 	 *
 	 * @param string $action         tix_action value (e.g. payment_return).
 	 * @param string $payment_token  Payment token.
-	 * @param string $nonce_action   Nonce action constant.
+	 * @param string $nonce_action   Nonce action prefix constant.
 	 * @return string
 	 */
 	protected function get_action_url( $action, $payment_token, $nonce_action ) {
@@ -635,7 +694,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 				),
 				$this->get_tickets_url()
 			),
-			$nonce_action
+			$this->get_nonce_action( $nonce_action, $payment_token )
 		);
 	}
 
@@ -844,14 +903,9 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 	 * @return void
 	 */
 	public function payment_return() {
-		if ( ! $this->verify_request_nonce( self::NONCE_ACTION_RETURN ) ) {
-			$this->reject_invalid_nonce();
-		}
-
 		$payment_token = $this->get_request_payment_token();
-		if ( empty( $payment_token ) ) {
-			wp_safe_redirect( esc_url_raw( $this->get_tickets_url() ) );
-			exit;
+		if ( empty( $payment_token ) || ! $this->verify_request_nonce( $this->get_nonce_action( self::NONCE_ACTION_RETURN, $payment_token ) ) ) {
+			$this->reject_invalid_nonce();
 		}
 
 		$reference_label = $this->get_fonepay_reference_label( $payment_token );
@@ -899,7 +953,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 						)
 					);
 					$this->clear_qr_session( $payment_token );
-					$this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data );
+					$this->payment_result_failed( $payment_token, $payment_data );
 					break;
 				}
 
@@ -909,7 +963,7 @@ class CampTix_Fonepay_QR_Payment_Method extends CampTix_Payment_Method {
 
 			case 'failed':
 				$this->clear_qr_session( $payment_token );
-				$this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data );
+				$this->payment_result_failed( $payment_token, $payment_data );
 				break;
 
 			case 'pending':

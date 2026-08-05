@@ -68,6 +68,13 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
     protected $options = array();
 
     /**
+     * Tokens reconciled in this timeout sweep.
+     *
+     * @var array<string, true>
+     */
+    protected static $timeout_reconciled_tokens = array();
+
+    /**
      * Initialize the gateway
      *
      * @return void
@@ -254,6 +261,11 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             return;
         }
 
+        if (isset(self::$timeout_reconciled_tokens[$payment_token])) {
+            return;
+        }
+        self::$timeout_reconciled_tokens[$payment_token] = true;
+
         $lookup = $this->verify_transaction($pidx);
         if (empty($lookup['status']) || 'Completed' !== $lookup['status']) {
             return;
@@ -291,6 +303,63 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             $payment_data,
             false // Non-interactive: do not redirect.
         );
+    }
+
+    /**
+     * FAILED unless attendees already publish/pending/refund.
+     *
+     * @param string $payment_token Payment token.
+     * @param array  $payment_data  Optional payment data for payment_result().
+     * @param bool   $interactive   Whether to redirect.
+     * @return mixed
+     */
+    protected function payment_result_failed($payment_token, $payment_data = array(), $interactive = true)
+    {
+        // Uncached status check.
+        $finalized = get_posts(
+            array(
+                'posts_per_page' => 1,
+                'post_type'      => 'tix_attendee',
+                'post_status'    => array('publish', 'pending', 'refund'),
+                'meta_query'     => array(
+                    array(
+                        'key'   => 'tix_payment_token',
+                        'value' => $payment_token,
+                    ),
+                ),
+            )
+        );
+
+        if (! empty($finalized)) {
+            $attendee = $finalized[0];
+            $this->log(
+                sprintf('Refusing to mark payment failed; attendee already in %s status.', $attendee->post_status),
+                $attendee->ID,
+                $payment_data
+            );
+
+            if (! $interactive) {
+                return false;
+            }
+
+            if (in_array($attendee->post_status, array('publish', 'pending'), true)) {
+                $access_token = get_post_meta($attendee->ID, 'tix_access_token', true);
+                $url          = add_query_arg(
+                    array(
+                        'tix_action'       => 'access_tickets',
+                        'tix_access_token' => $access_token,
+                    ),
+                    $this->get_tickets_url()
+                );
+                wp_safe_redirect($url . '#tix');
+                exit;
+            }
+
+            wp_safe_redirect(esc_url_raw($this->get_tickets_url()));
+            exit;
+        }
+
+        return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data, $interactive);
     }
 
     /**
@@ -357,7 +426,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             case 'Completed':
                 if (empty($lookup['transaction_id'])) {
                     $this->log('Khalti lookup completed without transaction_id for pidx ' . $pidx, $order['attendee_id'], $lookup);
-                    $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data);
+                    $this->payment_result_failed($payment_token, $payment_data);
                     return;
                 }
 
@@ -370,7 +439,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                         $order['attendee_id'],
                         compact('expected_amount', 'paid_amount', 'lookup')
                     );
-                    $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data);
+                    $this->payment_result_failed($payment_token, $payment_data);
                     return;
                 }
 
@@ -387,7 +456,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                 $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_CANCELLED, $payment_data);
                 break;
             case 'Failed':     // Payment attempt failed.
-                $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data);
+                $this->payment_result_failed($payment_token, $payment_data);
                 break;
             case 'Pending':    // Payment still in progress — do not issue tickets.
             case 'Initiated':  // Checkout started; customer has not paid yet.
@@ -463,7 +532,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
 
         if (empty($this->options['merchant_key'])) {
             $this->log('Khalti merchant key is not configured.');
-            return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED);
+            return $this->payment_result_failed($payment_token);
         }
 
         if (! in_array($this->camptix_options['currency'], $this->supported_currencies, true)) {
@@ -487,7 +556,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
         // One final check before sending the buyer to Khalti
         if (! $camptix->verify_order($order)) {
             $this->log('Could not verify CampTix order before Khalti checkout.', $order['attendee_id']);
-            return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED);
+            return $this->payment_result_failed($payment_token);
         }
 
         $buyer_name = trim(
@@ -560,7 +629,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                 sprintf('Khalti order total is below the minimum of %d paisa.', self::MIN_AMOUNT_PAISA),
                 $order['attendee_id']
             );
-            return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED);
+            return $this->payment_result_failed($payment_token);
         }
 
         $customer_name = sanitize_text_field($buyer_name);
@@ -568,7 +637,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
 
         if (! is_email($customer_email)) {
             $this->log('Invalid email format provided: ' . esc_html($buyer_email));
-            return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED);
+            return $this->payment_result_failed($payment_token);
         }
 
         $buyer_phone = preg_replace('/[^\d+]/', '', $buyer_phone);
@@ -600,7 +669,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
         if (is_wp_error($remote_response)) {
             $error_message = $remote_response->get_error_message();
             $this->log('Khalti Remote Request failed:' . esc_html($error_message));
-            return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED);
+            return $this->payment_result_failed($payment_token);
         }
 
         $response_code = (int) wp_remote_retrieve_response_code($remote_response);
@@ -609,7 +678,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                 sprintf('Khalti initiate failed with HTTP %d.', $response_code),
                 $order['attendee_id']
             );
-            return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED);
+            return $this->payment_result_failed($payment_token);
         }
 
         $result = json_decode(wp_remote_retrieve_body($remote_response), true);
@@ -627,7 +696,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                 esc_html($result['error_key'] ?? __('Unknown error', 'nepali-payments-for-camptix'))
             )
         );
-        return $this->payment_result($payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED);
+        return $this->payment_result_failed($payment_token);
     }
 
     /**
