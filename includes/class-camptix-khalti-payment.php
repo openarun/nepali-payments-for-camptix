@@ -142,15 +142,90 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
     {
         // Khalti returns via GET redirect; auth is the server-side lookup, not a WP form nonce.
         // phpcs:disable WordPress.Security.NonceVerification.Recommended
+        // ConnectIPS mangles the CampTix return query string; repair before the standard checks.
+        $this->normalize_khalti_return_query_vars();
+
         if (! isset($_GET['tix_payment_method']) || $this->id !== sanitize_text_field(wp_unslash($_GET['tix_payment_method']))) {
             return;
         }
 
-        if (isset($_GET['tix_action']) && ! empty(sanitize_text_field(wp_unslash($_GET['tix_action'])))) {
-            $action = sanitize_text_field(wp_unslash($_GET['tix_action']));
-            if ('payment_return' === $action) {
-                $this->payment_return();
+        if (isset($_GET['tix_action']) && 'payment_return' === sanitize_text_field(wp_unslash($_GET['tix_action']))) {
+            $this->payment_return();
+        }
+        // phpcs:enable WordPress.Security.NonceVerification.Recommended
+    }
+
+    /**
+     * Repair ConnectIPS-mangled return query strings in place.
+     *
+     * ConnectIPS (via Khalti) has been observed to:
+     * 1. HTML-encode separators (`&` → `&amp;`), producing keys like `amp;tix_payment_token`
+     * 2. Append `/?pidx=...` to the end of the URL, gluing pidx onto `tix_payment_method`
+     *
+     * Only known payment-return keys are promoted; values are sanitized where
+     * payment_return / template_redirect consume them.
+     *
+     * @return void
+     */
+    private function normalize_khalti_return_query_vars()
+    {
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended
+        $allowlist = array(
+            'tix_action',
+            'tix_payment_token',
+            'tix_payment_method',
+            'pidx',
+        );
+
+        foreach (array_keys($_GET) as $key) {
+            $key = (string) $key;
+            if (0 !== strpos($key, 'amp;')) {
+                continue;
             }
+            $fixed = substr($key, 4);
+            if ('' === $fixed || ! in_array($fixed, $allowlist, true) || isset($_GET[$fixed])) {
+                continue;
+            }
+
+            // Glued method+pidx must pass through for the split below.
+            if ('tix_payment_method' === $fixed && is_string($_GET[$key])) {
+                $method_candidate = wp_unslash($_GET[$key]);
+                if (false !== strpos($method_candidate, '?') && 0 === strpos($method_candidate, $this->id)) {
+                    $_GET[$fixed] = $method_candidate;
+                    continue;
+                }
+            }
+
+            if (is_string($_GET[$key])) {
+                $_GET[$fixed] = wp_unslash($_GET[$key]);
+            }
+        }
+
+        if (empty($_GET['tix_payment_method']) || ! is_string($_GET['tix_payment_method'])) {
+            return;
+        }
+
+        $method_raw = wp_unslash($_GET['tix_payment_method']);
+        if (false === strpos($method_raw, '?') || 0 !== strpos($method_raw, $this->id)) {
+            return;
+        }
+
+        // e.g. camptix_khalti/?pidx=XXX or camptix_khalti?pidx=XXX
+        $parts       = explode('?', $method_raw, 2);
+        $method_base = preg_replace('#/$#', '', $parts[0]);
+        if ($this->id !== $method_base) {
+            return;
+        }
+        $_GET['tix_payment_method'] = $this->id;
+
+        // ConnectIPS only glues pidx here; do not import arbitrary query keys.
+        if (empty($parts[1]) || isset($_GET['pidx'])) {
+            return;
+        }
+
+        parse_str($parts[1], $extra);
+        if (! empty($extra['pidx']) && is_string($extra['pidx'])) {
+            $_GET['pidx'] = $extra['pidx'];
         }
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
     }
@@ -320,7 +395,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                 // Leave attendees as draft until Khalti reports Completed.
                 $this->log(
                     sprintf('Khalti payment not confirmed for pidx %s (status: %s)', esc_html($pidx), esc_html($status)),
-                    null,
+                    $order['attendee_id'],
                     array(
                         'pidx'   => $pidx,
                         'status' => $status,
