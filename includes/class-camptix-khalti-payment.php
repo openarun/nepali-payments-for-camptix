@@ -61,6 +61,16 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
     public $supported_currencies = array('NPR');
 
     /**
+     * CampTix refund UI features (full charge refund per payment_token).
+     *
+     * @var array
+     */
+    public $supported_features = array(
+        'refund-single' => true,
+        'refund-all'    => true,
+    );
+
+    /**
      * Gateway options
      *
      * @var array
@@ -638,6 +648,9 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             exit;
         }
 
+        // Never persist or log mobile inside transaction_details.
+        unset($lookup['mobile']);
+
         $status = sanitize_text_field($lookup['status']);
         $payment_data = [
             'transaction_id'      => ! empty($lookup['transaction_id']) ? sanitize_text_field($lookup['transaction_id']) : $pidx,
@@ -1015,6 +1028,218 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
     }
 
     /**
+     * CampTix admin refund entry point (full refund of the Khalti charge).
+     *
+     * @param string $payment_token CampTix payment token.
+     * @return mixed
+     */
+    public function payment_refund($payment_token)
+    {
+        global $camptix;
+
+        $result = $this->send_refund_request($payment_token);
+
+        if (CampTix_Plugin::PAYMENT_STATUS_REFUNDED !== $result['status']) {
+            $error_message = '';
+            if (! empty($result['refund_transaction_details']['error'])) {
+                $error_message = $result['refund_transaction_details']['error'];
+            } elseif (! empty($result['refund_transaction_details']['detail'])) {
+                $error_message = $result['refund_transaction_details']['detail'];
+            }
+
+            if (! empty($error_message)) {
+                $camptix->error(
+                    sprintf(
+                        /* translators: %s: Khalti API error message */
+                        __('Khalti refund error: %s', 'nepali-payments-for-camptix'),
+                        esc_html($error_message)
+                    )
+                );
+            }
+
+            $order = $this->get_order($payment_token);
+            $this->log(
+                'Khalti refund failed.',
+                ! empty($order['attendee_id']) ? $order['attendee_id'] : null,
+                $result
+            );
+        }
+
+        return $this->payment_result(
+            $payment_token,
+            $result['status'],
+            array(
+                'transaction_id'             => $result['transaction_id'],
+                'refund_transaction_id'      => $result['refund_transaction_id'],
+                'refund_transaction_details' => array(
+                    'raw' => $result['refund_transaction_details'],
+                ),
+            )
+        );
+    }
+
+    /**
+     * Request a full refund from Khalti for the order's transaction_id.
+     *
+     * @param string $payment_token CampTix payment token.
+     * @return array
+     */
+    public function send_refund_request($payment_token)
+    {
+        global $camptix;
+
+        $result = array(
+            'status'                     => CampTix_Plugin::PAYMENT_STATUS_REFUND_FAILED,
+            'transaction_id'             => '',
+            'refund_transaction_id'      => '',
+            'refund_transaction_details' => array(),
+        );
+
+        if (empty($this->options['merchant_key'])) {
+            $this->log('Khalti refund: merchant key is not configured.');
+            $result['refund_transaction_details'] = array(
+                'error' => __('Khalti merchant key is not configured.', 'nepali-payments-for-camptix'),
+            );
+            return $result;
+        }
+
+        $order          = $this->get_order($payment_token);
+        $transaction_id = (string) $camptix->get_post_meta_from_payment_token($payment_token, 'tix_transaction_id');
+
+        if (empty($order) || '' === $transaction_id) {
+            $this->log(
+                'Khalti refund: order or transaction_id missing.',
+                ! empty($order['attendee_id']) ? $order['attendee_id'] : null,
+                compact('payment_token', 'transaction_id')
+            );
+            return $result;
+        }
+
+        $result['transaction_id'] = $transaction_id;
+
+        $remote_response = $this->request_khalti_refund($transaction_id, array());
+
+        if (is_wp_error($remote_response)) {
+            $error_data = $remote_response->get_error_data();
+            $this->log(
+                'Khalti refund request failed.',
+                $order['attendee_id'],
+                array(
+                    'transaction_id' => $transaction_id,
+                    'error'          => $remote_response->get_error_message(),
+                    'response'       => $error_data,
+                )
+            );
+            $result['refund_transaction_details'] = array(
+                'error'  => $remote_response->get_error_message(),
+                'status' => is_array($error_data) && isset($error_data['status']) ? $error_data['status'] : 0,
+                'body'   => is_array($error_data) && isset($error_data['body']) ? $error_data['body'] : '',
+            );
+            return $result;
+        }
+
+        $body = json_decode(wp_remote_retrieve_body($remote_response), true);
+        if (! is_array($body)) {
+            $body = array();
+        }
+
+        // Khalti does not return a separate refund transaction ID.
+        $result['status']                     = CampTix_Plugin::PAYMENT_STATUS_REFUNDED;
+        $result['refund_transaction_id']      = $transaction_id;
+        $result['refund_transaction_details'] = $body;
+
+        $this->log('Khalti refund succeeded.', $order['attendee_id'], compact('transaction_id', 'body'));
+
+        return $result;
+    }
+
+    /**
+     * POST a refund to Khalti merchant-transaction API (not under /api/v2/).
+     *
+     * @param string $transaction_id Khalti transaction_id from lookup.
+     * @param array  $payload        Optional body (e.g. mobile for bank refunds).
+     * @return array|WP_Error
+     */
+    private function request_khalti_refund($transaction_id, array $payload = array())
+    {
+        $base_url = $this->options['sandbox']
+            ? 'https://dev.khalti.com/api/merchant-transaction/'
+            : 'https://khalti.com/api/merchant-transaction/';
+
+        $url = $base_url . rawurlencode($transaction_id) . '/refund/';
+
+        return $this->request_khalti_url($url, $payload, true);
+    }
+
+    /**
+     * POST JSON to a Khalti API URL.
+     *
+     * @param string $url                 Full request URL.
+     * @param array  $payload             Request payload.
+     * @param bool   $fail_on_http_error  When true, non-2xx becomes WP_Error (refunds).
+     *                                    When false, return the raw response (lookup needs HTTP 400 bodies).
+     * @return array|WP_Error
+     */
+    private function request_khalti_url($url, array $payload, $fail_on_http_error = false)
+    {
+        $body = empty($payload) ? '{}' : wp_json_encode($payload);
+
+        $remote_response = wp_remote_post(
+            $url,
+            array(
+                'method'   => 'POST',
+                'headers'  => array(
+                    'Authorization' => 'key ' . sanitize_text_field($this->options['merchant_key']),
+                    'Content-Type'  => 'application/json',
+                ),
+                'body'     => $body,
+                'timeout'  => 30,
+                'blocking' => true,
+            )
+        );
+
+        if (is_wp_error($remote_response)) {
+            return $remote_response;
+        }
+
+        if (! $fail_on_http_error) {
+            return $remote_response;
+        }
+
+        $response_code = (int) wp_remote_retrieve_response_code($remote_response);
+        if ($response_code >= 200 && $response_code < 300) {
+            return $remote_response;
+        }
+
+        $response_body = wp_remote_retrieve_body($remote_response);
+        $decoded       = json_decode($response_body, true);
+        $message       = sprintf('Khalti API request failed with HTTP %d.', $response_code);
+
+        if (is_array($decoded)) {
+            if (! empty($decoded['detail'])) {
+                $message = is_string($decoded['detail']) ? $decoded['detail'] : wp_json_encode($decoded['detail']);
+            } elseif (! empty($decoded['error_key'])) {
+                $message = sanitize_text_field($decoded['error_key']);
+            } elseif (! empty($decoded['message'])) {
+                $message = sanitize_text_field($decoded['message']);
+            } else {
+                $message .= ' ' . wp_json_encode($decoded);
+            }
+        } elseif (! empty($response_body)) {
+            $message .= ' ' . $response_body;
+        }
+
+        return new WP_Error(
+            'khalti_http_error',
+            $message,
+            array(
+                'status' => $response_code,
+                'body'   => $response_body,
+            )
+        );
+    }
+
+    /**
      * POST to a Khalti API endpoint (transport only).
      *
      * @param string $endpoint API endpoint path relative to /api/v2/.
@@ -1027,18 +1252,7 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             ? 'https://dev.khalti.com/api/v2/'
             : 'https://khalti.com/api/v2/';
 
-        return wp_remote_post(
-            $base_url . ltrim($endpoint, '/'),
-            array(
-                'method'   => 'POST',
-                'headers'  => array(
-                    'Authorization' => 'key ' . sanitize_text_field($this->options['merchant_key']),
-                    'Content-Type'  => 'application/json',
-                ),
-                'body'     => wp_json_encode($payload),
-                'timeout'  => 30,
-                'blocking' => true,
-            )
-        );
+        // Keep raw HTTP responses so lookup can read Expired / User canceled (HTTP 400).
+        return $this->request_khalti_url($base_url . ltrim($endpoint, '/'), $payload, false);
     }
 }
