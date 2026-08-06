@@ -4,7 +4,7 @@ Tags: camptix, nepali, payments, gateway
 Requires at least: 4.7.0
 Requires PHP: 7.1
 Tested up to: 7.0
-Stable tag: 1.1.1
+Stable tag: 1.2.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -75,6 +75,13 @@ Nothing here
 
 == Changelog ==
 
+= 1.2.0 =
+* Add Khalti webhook payment notifications
+* Add Khalti payment refund support
+* Fix Khalti return handling when ConnectIPS mangles the query string
+* Harden Fonepay QR nonces, FAILED status handling, and timeout dedupe
+* Sanitize Khalti return parameters
+
 = 1.1.1 =
 * Fix Khalti completing paid orders when CampTix verify_order fails after payment
 * Verify CampTix order before Fonepay QR checkout
@@ -101,6 +108,9 @@ Nothing here
 * NPR currency support
 
 == Upgrade Notice ==
+
+= 1.2.0 =
+Adds Khalti webhooks and refunds, and hardens Khalti/Fonepay payment handling.
 
 = 1.1.1 =
 Fixes Khalti payment completion and hardens Fonepay QR status handling.
