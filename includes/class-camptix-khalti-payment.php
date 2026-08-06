@@ -97,10 +97,13 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
                 'ref_code'      => '',
                 'merchant_key'  => '',
                 'sandbox'       => true,
+                'notify_secret' => '',
             ),
             $this->get_payment_options()
         );
 
+        // Priority 6: before CampTix_Require_Login::block_unauthenticated_actions (7).
+        add_action('template_redirect', array($this, 'early_payment_notify'), 6);
         add_action('template_redirect', array($this, 'template_redirect'));
         add_action('camptix_pre_attendee_timeout', array($this, 'pre_attendee_timeout'));
     }
@@ -115,6 +118,74 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
         $this->add_settings_field_helper('ref_code', __('Reference Code', 'nepali-payments-for-camptix'), array($this, 'field_text'));
         $this->add_settings_field_helper('merchant_key', __('Merchant Key', 'nepali-payments-for-camptix'), array($this, 'field_text'));
         $this->add_settings_field_helper('sandbox', __('Sandbox Mode', 'nepali-payments-for-camptix'), array($this, 'field_yesno'));
+        $this->add_settings_field_helper(
+            'notify_url',
+            __('Webhook / Notify URL', 'nepali-payments-for-camptix'),
+            array($this, 'field_notify_url'),
+            __('Provide this full URL to Khalti. Re-send the URL to Khalti if the secret is regenerated.', 'nepali-payments-for-camptix')
+        );
+    }
+
+    /**
+     * Read-only notify URL for Khalti support to configure.
+     *
+     * @param array $args Field args from add_settings_field_helper().
+     * @return void
+     */
+    public function field_notify_url($args)
+    {
+        $url = $this->get_payment_notify_url();
+        printf(
+            '<code style="word-break:break-all;">%s</code>',
+            esc_html($url)
+        );
+        if (! empty($args['description'])) {
+            printf('<p class="description">%s</p>', esc_html($args['description']));
+        }
+    }
+
+    /**
+     * Khalti payment_notify URL (token comes from POST purchase_order_id).
+     *
+     * @return string
+     */
+    public function get_payment_notify_url()
+    {
+        return add_query_arg(
+            array(
+                'tix_action'         => 'payment_notify',
+                'tix_payment_method' => $this->id,
+                'tix_khalti_secret'  => $this->ensure_notify_secret(),
+            ),
+            $this->get_tickets_url()
+        );
+    }
+
+    /**
+     * Return the notify shared secret, generating and persisting one if needed.
+     *
+     * @return string
+     */
+    private function ensure_notify_secret()
+    {
+        if (! empty($this->options['notify_secret'])) {
+            return (string) $this->options['notify_secret'];
+        }
+
+        $secret                       = wp_generate_password(32, false, false);
+        $this->options['notify_secret'] = $secret;
+
+        global $camptix;
+        $options = $camptix->get_options();
+        $key     = 'payment_options_' . $this->id;
+        if (empty($options[$key]) || ! is_array($options[$key])) {
+            $options[$key] = array();
+        }
+        $options[$key]['notify_secret'] = $secret;
+        update_option('camptix_options', $options);
+        $this->camptix_options = $options;
+
+        return $secret;
     }
 
     /**
@@ -135,6 +206,11 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
         }
         if (isset($input['sandbox'])) {
             $output['sandbox'] = (bool) $input['sandbox'];
+        }
+
+        // Keep or create the notify secret; never accept it from the form.
+        if (empty($output['notify_secret'])) {
+            $output['notify_secret'] = wp_generate_password(32, false, false);
         }
 
         return $output;
@@ -160,6 +236,151 @@ class CampTix_Khalti_Payment_Method extends CampTix_Payment_Method
             $this->payment_return();
         }
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
+    }
+
+    /**
+     * Early handler for Khalti server webhook (before require-login).
+     *
+     * @return void
+     */
+    public function early_payment_notify()
+    {
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended
+        if (! isset($_GET['tix_payment_method']) || $this->id !== sanitize_text_field(wp_unslash($_GET['tix_payment_method']))) {
+            return;
+        }
+
+        if (! isset($_GET['tix_action']) || 'payment_notify' !== sanitize_text_field(wp_unslash($_GET['tix_action']))) {
+            return;
+        }
+        // phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+        $this->payment_notify();
+    }
+
+    /**
+     * Process Khalti server-to-server webhook (payment_notify).
+     *
+     * Completes the order only after lookup confirms Completed + amount match.
+     * Auth: shared secret in the notify URL (Khalti has no documented signature),
+     * then pidx bind + Khalti lookup API. Soft business failures still return 200
+     * so Khalti does not retry; auth failures return 403.
+     *
+     * @return void
+     */
+    public function payment_notify()
+    {
+        // Server webhook: no WP nonce. Auth is URL secret + pidx bind + lookup.
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended,WordPress.Security.NonceVerification.Missing
+
+        if (isset($_SERVER['REQUEST_METHOD']) && 'POST' !== strtoupper(sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD'])))) {
+            status_header(405);
+            exit;
+        }
+
+        $provided_secret = isset($_GET['tix_khalti_secret']) ? sanitize_text_field(wp_unslash($_GET['tix_khalti_secret'])) : '';
+        $expected_secret = $this->ensure_notify_secret();
+        if ('' === $provided_secret || ! hash_equals($expected_secret, $provided_secret)) {
+            $this->log('Khalti payment_notify: invalid or missing notify secret.');
+            status_header(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'Forbidden';
+            exit;
+        }
+
+        $pidx              = isset($_POST['pidx']) ? sanitize_text_field(wp_unslash($_POST['pidx'])) : '';
+        $purchase_order_id = isset($_POST['purchase_order_id']) ? sanitize_text_field(wp_unslash($_POST['purchase_order_id'])) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Recommended,WordPress.Security.NonceVerification.Missing
+
+        $this->log(
+            'Khalti payment_notify received.',
+            null,
+            array(
+                'pidx'              => $pidx,
+                'purchase_order_id' => $purchase_order_id,
+            )
+        );
+
+        if ('' === $pidx || '' === $purchase_order_id) {
+            $this->log('Khalti payment_notify: missing pidx or purchase_order_id.');
+            $this->respond_notify_ok();
+        }
+
+        $payment_token = $purchase_order_id;
+        $order         = $this->get_order($payment_token);
+        if (empty($order)) {
+            $this->log('Khalti payment_notify: order not found for token ' . $payment_token);
+            $this->respond_notify_ok();
+        }
+
+        $stored_pidx = (string) get_post_meta($order['attendee_id'], self::META_PIDX, true);
+        if ('' === $stored_pidx || ! hash_equals($stored_pidx, $pidx)) {
+            $this->log(
+                'Khalti payment_notify: pidx does not match the order initiate.',
+                $order['attendee_id'],
+                array(
+                    'pidx'        => $pidx,
+                    'stored_pidx' => $stored_pidx,
+                )
+            );
+            $this->respond_notify_ok();
+        }
+
+        $lookup = $this->verify_transaction($pidx);
+        if (empty($lookup['status']) || 'Completed' !== $lookup['status']) {
+            $this->log(
+                'Khalti payment_notify: lookup not Completed; leaving draft.',
+                $order['attendee_id'],
+                array(
+                    'pidx'   => $pidx,
+                    'lookup' => is_array($lookup) ? $lookup : array(),
+                )
+            );
+            $this->respond_notify_ok();
+        }
+
+        if (empty($lookup['transaction_id'])) {
+            $this->log('Khalti payment_notify: Completed without transaction_id.', $order['attendee_id'], $lookup);
+            $this->respond_notify_ok();
+        }
+
+        $expected_amount = (int) round(((float) $order['total']) * 100);
+        $paid_amount     = isset($lookup['total_amount']) ? (int) $lookup['total_amount'] : 0;
+        if ($paid_amount !== $expected_amount) {
+            $this->log(
+                'Khalti payment_notify: amount mismatch.',
+                $order['attendee_id'],
+                compact('expected_amount', 'paid_amount', 'lookup')
+            );
+            $this->respond_notify_ok();
+        }
+
+        $payment_data = array(
+            'transaction_id'      => sanitize_text_field($lookup['transaction_id']),
+            'transaction_details' => $lookup,
+        );
+
+        $this->payment_result(
+            $payment_token,
+            CampTix_Plugin::PAYMENT_STATUS_COMPLETED,
+            $payment_data,
+            false // Non-interactive: do not redirect.
+        );
+
+        $this->respond_notify_ok();
+    }
+
+    /**
+     * Acknowledge Khalti webhook with HTTP 200 and exit.
+     *
+     * @return void
+     */
+    private function respond_notify_ok()
+    {
+        status_header(200);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'OK';
+        exit;
     }
 
     /**
